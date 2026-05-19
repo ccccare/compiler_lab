@@ -48,6 +48,118 @@ class NumberAST final : public ExprAST {
   }
 };
 
+enum class UnaryOp {
+  Plus,
+  Minus,
+  Not,
+};
+
+inline const char *UnaryOpName(UnaryOp op) {
+  switch (op) {
+    case UnaryOp::Plus:
+      return "+";
+    case UnaryOp::Minus:
+      return "-";
+    case UnaryOp::Not:
+      return "!";
+  }
+  return "<unknown>";
+}
+
+class UnaryExprAST final : public ExprAST {
+ public:
+  UnaryExprAST(UnaryOp op, std::unique_ptr<ExprAST> operand)
+      : op(op), operand(std::move(operand)) {}
+
+  UnaryOp op;
+  std::unique_ptr<ExprAST> operand;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "UnaryExprAST { op: " << UnaryOpName(op) << "\n";
+    operand->Dump(os, indent + 2);
+    os << "\n";
+    PrintIndent(os, indent);
+    os << "}";
+  }
+};
+
+enum class BinaryOp {
+  Add,
+  Sub,
+  Mul,
+  Div,
+  Mod,
+
+  Lt,
+  Gt,
+  Le,
+  Ge,
+  Eq,
+  Ne,
+
+  LAnd,
+  LOr,
+};
+
+inline const char *BinaryOpName(BinaryOp op) {
+  switch (op) {
+    case BinaryOp::Add:
+      return "+";
+    case BinaryOp::Sub:
+      return "-";
+    case BinaryOp::Mul:
+      return "*";
+    case BinaryOp::Div:
+      return "/";
+    case BinaryOp::Mod:
+      return "%";
+    case BinaryOp::Lt:
+      return "<";
+    case BinaryOp::Gt:
+      return ">";
+    case BinaryOp::Le:
+      return "<=";
+    case BinaryOp::Ge:
+      return ">=";
+    case BinaryOp::Eq:
+      return "==";
+    case BinaryOp::Ne:
+      return "!=";
+    case BinaryOp::LAnd:
+      return "&&";
+    case BinaryOp::LOr:
+      return "||";
+  }
+  return "<unknown>";
+}
+
+class BinaryExprAST final : public ExprAST {
+ public:
+  BinaryExprAST(BinaryOp op,
+                std::unique_ptr<ExprAST> lhs,
+                std::unique_ptr<ExprAST> rhs)
+      : op(op), lhs(std::move(lhs)), rhs(std::move(rhs)) {}
+
+  BinaryOp op;
+  std::unique_ptr<ExprAST> lhs;
+  std::unique_ptr<ExprAST> rhs;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "BinaryExprAST { op: " << BinaryOpName(op) << "\n";
+
+    lhs->Dump(os, indent + 2);
+    os << "\n";
+
+    rhs->Dump(os, indent + 2);
+    os << "\n";
+
+    PrintIndent(os, indent);
+    os << "}";
+  }
+};
+
 class BlockItemAST : public BaseAST {
  public:
   ~BlockItemAST() override = default;

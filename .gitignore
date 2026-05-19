@@ -13,6 +13,7 @@ compiler
 # local debug files
 debug/
 tmp/
+docs/
 
 # editor
 .vscode/

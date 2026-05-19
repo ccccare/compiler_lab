@@ -13,6 +13,9 @@ class KoopaGenerator {
 
  private:
   std::ostream &os_;
+  int temp_id_ = 0;
+
+  std::string NewTemp();
 
   void GenerateCompUnit(const CompUnitAST &ast);
   void GenerateFuncDef(const FuncDefAST &ast);

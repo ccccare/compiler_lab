@@ -57,6 +57,13 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 "int"               { return INT; }
 "return"            { return RETURN; }
 
+"<="                { return LE; }
+">="                { return GE; }
+"=="                { return EQ; }
+"!="                { return NE; }
+"&&"                { return LAND; }
+"||"                { return LOR; }
+
 {Identifier}        {
                        yylval.str_val = new std::string(yytext);
                        return IDENT;
