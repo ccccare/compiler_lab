@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# build outputs
+build/
+*.o
+*.out
+*.log
+
+# executable if generated at project root accidentally
+compiler
+
+# local debug files
+debug/
+tmp/
+
+# editor
+.vscode/
+.idea/
