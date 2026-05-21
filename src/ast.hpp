@@ -372,6 +372,46 @@ class IfStmtAST final : public StmtAST {
   }
 };
 
+class WhileStmtAST final : public StmtAST {
+ public:
+  std::unique_ptr<ExprAST> cond;
+  std::unique_ptr<StmtAST> body;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "WhileStmtAST {\n";
+
+    PrintIndent(os, indent + 2);
+    os << "cond:\n";
+    cond->Dump(os, indent + 4);
+    os << "\n";
+
+    PrintIndent(os, indent + 2);
+    os << "body:\n";
+    body->Dump(os, indent + 4);
+    os << "\n";
+
+    PrintIndent(os, indent);
+    os << "}";
+  }
+};
+
+class BreakStmtAST final : public StmtAST {
+ public:
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "BreakStmtAST {}";
+  }
+};
+
+class ContinueStmtAST final : public StmtAST {
+ public:
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "ContinueStmtAST {}";
+  }
+};
+
 class FuncDefAST final : public BaseAST {
  public:
   TypeKind ret_type = TypeKind::Int;

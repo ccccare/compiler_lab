@@ -49,7 +49,7 @@ static std::unique_ptr<VarDefAST> TakeVarDef(BaseAST *ptr) {
   BaseAST *ast_val;
 }
 
-%token CONST INT RETURN IF ELSE
+%token CONST INT RETURN IF ELSE WHILE BREAK CONTINUE
 %token LE GE EQ NE LAND LOR
 
 %token <str_val> IDENT
@@ -256,6 +256,18 @@ Stmt
       stmt->else_stmt = std::unique_ptr<StmtAST>(static_cast<StmtAST *>($7));
       $$ = stmt.release();
     }
+  | WHILE '(' Exp ')' Stmt {
+    auto stmt = std::make_unique<WhileStmtAST>();
+    stmt->cond = TakeExpr($3);
+    stmt->body = std::unique_ptr<StmtAST>(static_cast<StmtAST *>($5));
+    $$ = stmt.release();
+  }
+  | BREAK ';' {
+    $$ = new BreakStmtAST();
+  }
+  | CONTINUE ';' {
+    $$ = new ContinueStmtAST();
+  }
   | RETURN Exp ';' {
       auto stmt = std::make_unique<ReturnStmtAST>();
       stmt->value = TakeExpr($2);

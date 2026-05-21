@@ -102,6 +102,7 @@ void KoopaGenerator::GenerateFuncDef(const FuncDefAST &ast) {
   block_id_ = 0;
   current_block_terminated_ = false;
   scopes_.clear();
+  loop_stack_.clear();
 
   os_ << "fun @" << ast.ident << "(): i32 {\n";
   os_ << "%entry:\n";
@@ -217,6 +218,62 @@ void KoopaGenerator::GenerateIfStmt(const IfStmtAST &ast) {
   EmitBlockLabel(end_label);
 }
 
+void KoopaGenerator::GenerateWhileStmt(const WhileStmtAST &ast) {
+  std::string entry_label = NewBlock("while_entry");
+  std::string body_label = NewBlock("while_body");
+  std::string end_label = NewBlock("while_end");
+
+  // 从当前基本块跳到 while 条件判断块。
+  EmitJumpIfNeeded(entry_label);
+
+  // 条件判断块。
+  EmitBlockLabel(entry_label);
+  std::string cond_value = GenerateExpr(*ast.cond);
+  os_ << "  br " << cond_value << ", " << body_label << ", " << end_label
+      << "\n";
+  current_block_terminated_ = true;
+
+  // 循环体。
+  EmitBlockLabel(body_label);
+
+  loop_stack_.push_back(LoopInfo{
+      entry_label,  // continue 跳回条件判断块
+      end_label     // break 跳到循环结束块
+  });
+
+  GenerateStmt(*ast.body);
+
+  loop_stack_.pop_back();
+
+  // 如果循环体没有 return/break/continue 等终结指令，就跳回条件判断。
+  EmitJumpIfNeeded(entry_label);
+
+  // 循环结束后的块。
+  EmitBlockLabel(end_label);
+}
+
+void KoopaGenerator::GenerateBreakStmt(const BreakStmtAST &ast) {
+  (void)ast;
+
+  if (loop_stack_.empty()) {
+    throw std::runtime_error("break statement not within a loop");
+  }
+
+  os_ << "  jump " << loop_stack_.back().break_label << "\n";
+  current_block_terminated_ = true;
+}
+
+void KoopaGenerator::GenerateContinueStmt(const ContinueStmtAST &ast) {
+  (void)ast;
+
+  if (loop_stack_.empty()) {
+    throw std::runtime_error("continue statement not within a loop");
+  }
+
+  os_ << "  jump " << loop_stack_.back().continue_label << "\n";
+  current_block_terminated_ = true;
+}
+
 void KoopaGenerator::GenerateStmt(const StmtAST &ast) {
   if (const auto *assign_stmt = dynamic_cast<const AssignStmtAST *>(&ast)) {
     const SymbolInfo &symbol = LookupSymbol(assign_stmt->ident);
@@ -250,6 +307,21 @@ void KoopaGenerator::GenerateStmt(const StmtAST &ast) {
     GenerateIfStmt(*if_stmt);
     return;
   } 
+
+  if (const auto *while_stmt = dynamic_cast<const WhileStmtAST *>(&ast)) {
+    GenerateWhileStmt(*while_stmt);
+    return;
+  } 
+
+  if (const auto *break_stmt = dynamic_cast<const BreakStmtAST *>(&ast)) {
+    GenerateBreakStmt(*break_stmt);
+    return;
+  }
+
+  if (const auto *continue_stmt = dynamic_cast<const ContinueStmtAST *>(&ast)) {
+    GenerateContinueStmt(*continue_stmt);
+    return;
+  }
 
   if (const auto *ret_stmt = dynamic_cast<const ReturnStmtAST *>(&ast)) {
     std::string ret_value = GenerateExpr(*ret_stmt->value);

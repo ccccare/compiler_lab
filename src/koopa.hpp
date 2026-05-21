@@ -26,6 +26,11 @@ class KoopaGenerator {
     std::string ir_name;
   };
 
+  struct LoopInfo {
+  std::string continue_label;
+  std::string break_label;
+  };
+
   std::ostream &os_;
 
   int temp_id_ = 0;
@@ -34,6 +39,7 @@ class KoopaGenerator {
   int block_id_ = 0;
 
   std::vector<std::unordered_map<std::string, SymbolInfo>> scopes_;
+  std::vector<LoopInfo> loop_stack_;
 
   std::string NewTemp();
   std::string NewVar();
@@ -46,6 +52,9 @@ class KoopaGenerator {
   std::string GenerateLogicalAnd(const BinaryExprAST &ast);
   std::string GenerateLogicalOr(const BinaryExprAST &ast);
   void GenerateIfStmt(const IfStmtAST &ast);
+  void GenerateWhileStmt(const WhileStmtAST &ast);
+  void GenerateBreakStmt(const BreakStmtAST &ast);
+  void GenerateContinueStmt(const ContinueStmtAST &ast);
 
   void EnterScope();
   void ExitScope();
