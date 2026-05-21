@@ -1,10 +1,10 @@
 #include "riscv.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
-#include <algorithm>
 
 #include "koopa.h"
 
@@ -46,6 +46,7 @@ class RawProgramVisitor {
   int outgoing_args_size_ = 0;
   int ra_offset_ = -1;
   bool has_call_ = false;
+
   std::unordered_map<koopa_raw_value_t, int> stack_offset_;
 
   void Visit(const koopa_raw_slice_t &slice) {
@@ -72,7 +73,7 @@ class RawProgramVisitor {
   }
 
   void Visit(const koopa_raw_function_t &func) {
-    // 函数声明没有基本块，例如 decl @getint(): i32，跳过即可。
+    // 函数声明没有基本块，例如 decl @getint(): i32。
     if (func->bbs.len == 0) {
       return;
     }
@@ -85,10 +86,8 @@ class RawProgramVisitor {
     os_ << "  .globl " << func_name << "\n";
     os_ << func_name << ":\n";
 
-    // prologue: 开栈帧
     EmitAddSp(-stack_size_);
 
-    // 如果当前函数内部出现了 call，则必须保存 ra。
     if (has_call_) {
       EmitStoreToStack("ra", ra_offset_);
     }
@@ -96,21 +95,45 @@ class RawProgramVisitor {
     for (size_t i = 0; i < func->bbs.len; ++i) {
       auto bb = reinterpret_cast<koopa_raw_basic_block_t>(func->bbs.buffer[i]);
 
-      // 第一个基本块对应函数入口，已经有 func_name:，不额外输出 entry:
-    if (i != 0) {
-      os_ << StripKoopaNamePrefix(bb->name) << ":\n";
-    }
+      // 第一个基本块就是函数入口，已经有 func_name:，不额外输出 entry:。
+      if (i != 0) {
+        os_ << StripKoopaNamePrefix(bb->name) << ":\n";
+      }
 
       Visit(bb);
     }
   }
 
-  bool NeedStackSlot(const koopa_raw_value_t &value) const {
+  int SizeOfType(const koopa_raw_type_t &ty) {
+    switch (ty->tag) {
+      case KOOPA_RTT_INT32:
+        return 4;
+
+      case KOOPA_RTT_POINTER:
+        return 4;
+
+      case KOOPA_RTT_ARRAY:
+        return static_cast<int>(ty->data.array.len) *
+               SizeOfType(ty->data.array.base);
+
+      case KOOPA_RTT_UNIT:
+        return 0;
+
+      default:
+        throw std::runtime_error("unsupported type size");
+    }
+  }
+
+  int StackSlotSize(const koopa_raw_value_t &value) {
     if (value->kind.tag == KOOPA_RVT_ALLOC) {
-      return true;
+      return SizeOfType(value->ty->data.pointer.base);
     }
 
-    return value->ty->tag != KOOPA_RTT_UNIT;
+    if (value->ty->tag != KOOPA_RTT_UNIT) {
+      return 4;
+    }
+
+    return 0;
   }
 
   void PrepareStackFrame(const koopa_raw_function_t &func) {
@@ -125,42 +148,42 @@ class RawProgramVisitor {
     for (size_t i = 0; i < func->bbs.len; ++i) {
       auto bb = reinterpret_cast<koopa_raw_basic_block_t>(func->bbs.buffer[i]);
 
-    for (size_t j = 0; j < bb->insts.len; ++j) {
-      auto value = reinterpret_cast<koopa_raw_value_t>(bb->insts.buffer[j]);
+      for (size_t j = 0; j < bb->insts.len; ++j) {
+        auto value = reinterpret_cast<koopa_raw_value_t>(bb->insts.buffer[j]);
 
-      if (value->kind.tag == KOOPA_RVT_CALL) {
-        has_call_ = true;
-        max_call_args =
-            std::max(
-          max_call_args,
-          static_cast<size_t>(value->kind.data.call.args.len));
+        if (value->kind.tag == KOOPA_RVT_CALL) {
+          has_call_ = true;
+          max_call_args =
+              std::max(max_call_args,
+                       static_cast<size_t>(value->kind.data.call.args.len));
+        }
       }
     }
-  }
 
-  if (max_call_args > 8) {
-    outgoing_args_size_ = static_cast<int>((max_call_args - 8) * 4);
-  }
+    if (max_call_args > 8) {
+      outgoing_args_size_ = static_cast<int>((max_call_args - 8) * 4);
+    }
 
-  int offset = outgoing_args_size_;
+    int offset = outgoing_args_size_;
 
-  for (size_t i = 0; i < func->bbs.len; ++i) {
-    auto bb = reinterpret_cast<koopa_raw_basic_block_t>(func->bbs.buffer[i]);
+    for (size_t i = 0; i < func->bbs.len; ++i) {
+      auto bb = reinterpret_cast<koopa_raw_basic_block_t>(func->bbs.buffer[i]);
 
-    for (size_t j = 0; j < bb->insts.len; ++j) {
-      auto value = reinterpret_cast<koopa_raw_value_t>(bb->insts.buffer[j]);
+      for (size_t j = 0; j < bb->insts.len; ++j) {
+        auto value = reinterpret_cast<koopa_raw_value_t>(bb->insts.buffer[j]);
 
-      if (NeedStackSlot(value)) {
-        stack_offset_[value] = offset;
-        offset += 4;
+        int size = StackSlotSize(value);
+        if (size > 0) {
+          stack_offset_[value] = offset;
+          offset += size;
+        }
       }
     }
-  }
 
-  if (has_call_) {
-    ra_offset_ = offset;
-    offset += 4;
-  }
+    if (has_call_) {
+      ra_offset_ = offset;
+      offset += 4;
+    }
 
     stack_size_ = AlignTo(offset, 16);
   }
@@ -207,37 +230,72 @@ class RawProgramVisitor {
     }
   }
 
-
-  void VisitBranch(const koopa_raw_branch_t &branch) {
-    LoadValue(branch.cond, "t0");
-
-    os_ << "  bnez t0, " << StripKoopaNamePrefix(branch.true_bb->name) << "\n";
-    os_ << "  j " << StripKoopaNamePrefix(branch.false_bb->name) << "\n";
-  }
-
-  void VisitJump(const koopa_raw_jump_t &jump) {
-    os_ << "  j " << StripKoopaNamePrefix(jump.target->name) << "\n";
-  }
-
-  void VisitCall(const koopa_raw_value_t &value,
-               const koopa_raw_call_t &call) {
-    for (size_t i = 0; i < call.args.len; ++i) {
-      auto arg = reinterpret_cast<koopa_raw_value_t>(call.args.buffer[i]);
-
-      if (i < 8) {
-        LoadValue(arg, "a" + std::to_string(i));
-      } else {
-        LoadValue(arg, "t0");
-        EmitStoreToStack("t0", static_cast<int>((i - 8) * 4));
+  void LoadAddress(const koopa_raw_value_t &value, const std::string &reg) {
+    switch (value->kind.tag) {
+      case KOOPA_RVT_GLOBAL_ALLOC: {
+        std::string name = StripKoopaNamePrefix(value->name);
+        os_ << "  la " << reg << ", " << name << "\n";
+        break;
       }
-    }
 
-    os_ << "  call " << StripKoopaNamePrefix(call.callee->name) << "\n";
+      case KOOPA_RVT_ALLOC: {
+        int offset = GetStackOffset(value);
+        if (IsImm12(offset)) {
+          os_ << "  addi " << reg << ", sp, " << offset << "\n";
+        } else {
+          os_ << "  li " << reg << ", " << offset << "\n";
+          os_ << "  add " << reg << ", sp, " << reg << "\n";
+        }
+        break;
+      }
 
-    // 如果 call 有返回值，返回值在 a0，需要保存到当前 call value 的栈槽。
-    if (value->ty->tag != KOOPA_RTT_UNIT) {
-      StoreValue(value, "a0");
+      case KOOPA_RVT_GET_ELEM_PTR:
+      case KOOPA_RVT_GET_PTR:
+      case KOOPA_RVT_LOAD:
+      case KOOPA_RVT_CALL:
+        EmitLoadFromStack(reg, GetStackOffset(value));
+        break;
+
+      default:
+        throw std::runtime_error("unsupported address value");
     }
+  }
+
+  void LoadValue(const koopa_raw_value_t &value, const std::string &reg) {
+    switch (value->kind.tag) {
+      case KOOPA_RVT_INTEGER:
+        os_ << "  li " << reg << ", " << value->kind.data.integer.value
+            << "\n";
+        break;
+
+      case KOOPA_RVT_BINARY:
+      case KOOPA_RVT_LOAD:
+      case KOOPA_RVT_CALL:
+      case KOOPA_RVT_GET_ELEM_PTR:
+      case KOOPA_RVT_GET_PTR:
+        EmitLoadFromStack(reg, GetStackOffset(value));
+        break;
+
+      case KOOPA_RVT_FUNC_ARG_REF: {
+        size_t index = value->kind.data.func_arg_ref.index;
+
+        if (index < 8) {
+          os_ << "  mv " << reg << ", a" << index << "\n";
+        } else {
+          int offset = stack_size_ + static_cast<int>((index - 8) * 4);
+          EmitLoadFromStack(reg, offset);
+        }
+
+        break;
+      }
+
+      default:
+        throw std::runtime_error("unsupported value used as operand");
+    }
+  }
+
+  void StoreValue(const koopa_raw_value_t &value, const std::string &reg) {
+    EmitStoreToStack(reg, GetStackOffset(value));
   }
 
   void Visit(const koopa_raw_basic_block_t &bb) {
@@ -248,12 +306,12 @@ class RawProgramVisitor {
     const auto &kind = value->kind;
 
     switch (kind.tag) {
-      case KOOPA_RVT_ALLOC:
-        VisitAlloc(value);
-        break;
-      
       case KOOPA_RVT_GLOBAL_ALLOC:
         VisitGlobalAlloc(value, kind.data.global_alloc);
+        break;
+
+      case KOOPA_RVT_ALLOC:
+        VisitAlloc(value);
         break;
 
       case KOOPA_RVT_LOAD:
@@ -271,7 +329,7 @@ class RawProgramVisitor {
       case KOOPA_RVT_BINARY:
         VisitBinary(value, kind.data.binary);
         break;
-      
+
       case KOOPA_RVT_CALL:
         VisitCall(value, kind.data.call);
         break;
@@ -284,100 +342,71 @@ class RawProgramVisitor {
         VisitJump(kind.data.jump);
         break;
 
+      case KOOPA_RVT_GET_ELEM_PTR:
+        VisitGetElemPtr(value, kind.data.get_elem_ptr);
+        break;
+
+      case KOOPA_RVT_GET_PTR:
+        VisitGetPtr(value, kind.data.get_ptr);
+        break;
+
       default:
-        throw std::runtime_error("unsupported Koopa value kind in Lv4");
+        throw std::runtime_error("unsupported Koopa value kind in Lv9");
     }
   }
 
   void VisitAlloc(const koopa_raw_value_t &value) {
-      (void)value;
-    // alloc 只代表一块栈内存。栈槽已经在 PrepareStackFrame 中分配好了。
-    // 因此真正生成汇编时，这里不需要输出任何指令。
+    (void)value;
+    // alloc 只对应栈槽分配，PrepareStackFrame 已经处理。
+  }
+
+  void EmitGlobalInit(const koopa_raw_value_t &init,
+                      const koopa_raw_type_t &ty) {
+    if (init->kind.tag == KOOPA_RVT_INTEGER) {
+      os_ << "  .word " << init->kind.data.integer.value << "\n";
+      return;
+    }
+
+    if (init->kind.tag == KOOPA_RVT_ZERO_INIT) {
+      os_ << "  .zero " << SizeOfType(ty) << "\n";
+      return;
+    }
+
+    if (init->kind.tag == KOOPA_RVT_AGGREGATE) {
+      for (size_t i = 0; i < init->kind.data.aggregate.elems.len; ++i) {
+        auto elem = reinterpret_cast<koopa_raw_value_t>(
+            init->kind.data.aggregate.elems.buffer[i]);
+        EmitGlobalInit(elem, ty->data.array.base);
+      }
+      return;
+    }
+
+    throw std::runtime_error("unsupported global initializer");
   }
 
   void VisitGlobalAlloc(const koopa_raw_value_t &value,
-                      const koopa_raw_global_alloc_t &global_alloc) {
+                        const koopa_raw_global_alloc_t &global_alloc) {
     std::string name = StripKoopaNamePrefix(value->name);
 
     os_ << "  .data\n";
     os_ << "  .globl " << name << "\n";
     os_ << name << ":\n";
 
-    auto init = global_alloc.init;
-
-    if (init->kind.tag == KOOPA_RVT_INTEGER) {
-      os_ << "  .word " << init->kind.data.integer.value << "\n";
-    } else if (init->kind.tag == KOOPA_RVT_ZERO_INIT) {
-      os_ << "  .zero 4\n";
-    } else {
-      throw std::runtime_error("unsupported global initializer in Lv8");
-    }
-  }
-
-  void LoadValue(const koopa_raw_value_t &value, const std::string &reg) {
-    switch (value->kind.tag) {
-      case KOOPA_RVT_INTEGER:
-        os_ << "  li " << reg << ", " << value->kind.data.integer.value
-            << "\n";
-        break;
-
-      case KOOPA_RVT_BINARY:
-      case KOOPA_RVT_LOAD:
-      case KOOPA_RVT_CALL:
-        EmitLoadFromStack(reg, GetStackOffset(value));
-        break;
-
-      case KOOPA_RVT_FUNC_ARG_REF: {
-        size_t index = value->kind.data.func_arg_ref.index;
-
-        if (index < 8) {
-          os_ << "  mv " << reg << ", a" << index << "\n";
-        } else {
-          // 第 9 个及之后的参数在 caller 的栈上传入。
-          // callee 开栈帧后，old_sp 变成 new_sp + stack_size_。
-          int offset = stack_size_ + static_cast<int>((index - 8) * 4);
-          EmitLoadFromStack(reg, offset);
-        }
-
-        break;
-      }
-
-      default:
-        throw std::runtime_error("unsupported value used as operand");
-    }
-  }
-
-  void StoreValue(const koopa_raw_value_t &value, const std::string &reg) {
-    EmitStoreToStack(reg, GetStackOffset(value));
+    auto base_ty = value->ty->data.pointer.base;
+    EmitGlobalInit(global_alloc.init, base_ty);
   }
 
   void VisitLoad(const koopa_raw_value_t &value,
-               const koopa_raw_load_t &load) {
-    if (load.src->kind.tag == KOOPA_RVT_GLOBAL_ALLOC) {
-      std::string name = StripKoopaNamePrefix(load.src->name);
-      os_ << "  la t0, " << name << "\n";
-      os_ << "  lw t0, 0(t0)\n";
-      StoreValue(value, "t0");
-      return;
-    }
-
-    int src_offset = GetStackOffset(load.src);
-    EmitLoadFromStack("t0", src_offset);
+                 const koopa_raw_load_t &load) {
+    LoadAddress(load.src, "t0");
+    os_ << "  lw t0, 0(t0)\n";
     StoreValue(value, "t0");
   }
 
   void VisitStore(const koopa_raw_store_t &store) {
     LoadValue(store.value, "t0");
-
-    if (store.dest->kind.tag == KOOPA_RVT_GLOBAL_ALLOC) {
-      std::string name = StripKoopaNamePrefix(store.dest->name);
-      os_ << "  la t1, " << name << "\n";
-      os_ << "  sw t0, 0(t1)\n";
-      return;
-    }
-
-    int dest_offset = GetStackOffset(store.dest);
-    EmitStoreToStack("t0", dest_offset);
+    LoadAddress(store.dest, "t1");
+    os_ << "  sw t0, 0(t1)\n";
   }
 
   void VisitReturn(const koopa_raw_return_t &ret) {
@@ -385,15 +414,74 @@ class RawProgramVisitor {
       LoadValue(ret.value, "a0");
     }
 
-    // epilogue: 如果保存过 ra，这里恢复。
     if (has_call_) {
       EmitLoadFromStack("ra", ra_offset_);
     }
 
-    // 恢复 sp。
     EmitAddSp(stack_size_);
 
     os_ << "  ret\n";
+  }
+
+  void VisitBranch(const koopa_raw_branch_t &branch) {
+    LoadValue(branch.cond, "t0");
+
+    os_ << "  bnez t0, " << StripKoopaNamePrefix(branch.true_bb->name) << "\n";
+    os_ << "  j " << StripKoopaNamePrefix(branch.false_bb->name) << "\n";
+  }
+
+  void VisitJump(const koopa_raw_jump_t &jump) {
+    os_ << "  j " << StripKoopaNamePrefix(jump.target->name) << "\n";
+  }
+
+  void VisitCall(const koopa_raw_value_t &value,
+                 const koopa_raw_call_t &call) {
+    for (size_t i = 0; i < call.args.len; ++i) {
+      auto arg = reinterpret_cast<koopa_raw_value_t>(call.args.buffer[i]);
+
+      if (i < 8) {
+        LoadValue(arg, "a" + std::to_string(i));
+      } else {
+        LoadValue(arg, "t0");
+        EmitStoreToStack("t0", static_cast<int>((i - 8) * 4));
+      }
+    }
+
+    os_ << "  call " << StripKoopaNamePrefix(call.callee->name) << "\n";
+
+    if (value->ty->tag != KOOPA_RTT_UNIT) {
+      StoreValue(value, "a0");
+    }
+  }
+
+  void VisitGetElemPtr(const koopa_raw_value_t &value,
+                       const koopa_raw_get_elem_ptr_t &gep) {
+    LoadAddress(gep.src, "t0");
+    LoadValue(gep.index, "t1");
+
+    auto array_ty = gep.src->ty->data.pointer.base;
+    int elem_size = SizeOfType(array_ty->data.array.base);
+
+    os_ << "  li t2, " << elem_size << "\n";
+    os_ << "  mul t1, t1, t2\n";
+    os_ << "  add t0, t0, t1\n";
+
+    StoreValue(value, "t0");
+  }
+
+  void VisitGetPtr(const koopa_raw_value_t &value,
+                   const koopa_raw_get_ptr_t &gp) {
+    LoadAddress(gp.src, "t0");
+    LoadValue(gp.index, "t1");
+
+    auto base_ty = gp.src->ty->data.pointer.base;
+    int elem_size = SizeOfType(base_ty);
+
+    os_ << "  li t2, " << elem_size << "\n";
+    os_ << "  mul t1, t1, t2\n";
+    os_ << "  add t0, t0, t1\n";
+
+    StoreValue(value, "t0");
   }
 
   void VisitBinary(const koopa_raw_value_t &value,
@@ -459,7 +547,7 @@ class RawProgramVisitor {
         break;
 
       default:
-        throw std::runtime_error("unsupported binary operator in Lv4");
+        throw std::runtime_error("unsupported binary operator");
     }
 
     StoreValue(value, "t0");

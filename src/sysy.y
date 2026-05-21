@@ -53,6 +53,14 @@ static std::unique_ptr<ExprListAST> TakeExprList(BaseAST *ptr) {
   return std::unique_ptr<ExprListAST>(static_cast<ExprListAST *>(ptr));
 }
 
+static std::unique_ptr<InitValAST> TakeInitVal(BaseAST *ptr) {
+  return std::unique_ptr<InitValAST>(static_cast<InitValAST *>(ptr));
+}
+
+static std::unique_ptr<ExprVectorAST> TakeExprVector(BaseAST *ptr) {
+  return std::unique_ptr<ExprVectorAST>(static_cast<ExprVectorAST *>(ptr));
+}
+
 %}
 
 %parse-param { std::unique_ptr<BaseAST> &ast }
@@ -80,6 +88,9 @@ static std::unique_ptr<ExprListAST> TakeExprList(BaseAST *ptr) {
 %type <ast_val> CompUnitItem CompUnitItemList
 %type <ast_val> FuncFParams FuncFParam
 %type <ast_val> FuncRParams
+%type <ast_val> ArrayDims
+%type <ast_val> InitValList ConstInitValList
+%type <ast_val> ArrayIndices
 
 %%
 
@@ -193,6 +204,29 @@ FuncFParam
 
       $$ = param.release();
     }
+  | INT IDENT '[' ']' {
+      auto param = std::make_unique<FuncFParamAST>();
+      param->type = TypeKind::Int;
+      param->is_array = true;
+
+      std::unique_ptr<std::string> ident($2);
+      param->ident = *ident;
+
+      $$ = param.release();
+    }
+  | INT IDENT '[' ']' ArrayDims {
+      auto param = std::make_unique<FuncFParamAST>();
+      param->type = TypeKind::Int;
+      param->is_array = true;
+
+      std::unique_ptr<std::string> ident($2);
+      param->ident = *ident;
+
+      auto dims = TakeExprVector($5);
+      param->dims = std::move(dims->exprs);
+
+      $$ = param.release();
+    }
   ;
 
 FuncRParams
@@ -273,7 +307,20 @@ ConstDef
       std::unique_ptr<std::string> ident($1);
       def->ident = *ident;
 
-      def->init = TakeExpr($3);
+      def->init = TakeInitVal($3);
+
+      $$ = def.release();
+    }
+  | IDENT ArrayDims '=' ConstInitVal {
+      auto def = std::make_unique<ConstDefAST>();
+
+      std::unique_ptr<std::string> ident($1);
+      def->ident = *ident;
+
+      auto dims = TakeExprVector($2);
+      def->dims = std::move(dims->exprs);
+
+      def->init = TakeInitVal($4);
 
       $$ = def.release();
     }
@@ -281,7 +328,27 @@ ConstDef
 
 ConstInitVal
   : ConstExp {
-      $$ = $1;
+      $$ = InitValAST::FromExpr(TakeExpr($1)).release();
+    }
+  | '{' '}' {
+      auto list = std::vector<std::unique_ptr<InitValAST>>();
+      $$ = InitValAST::FromList(std::move(list)).release();
+    }
+  | '{' ConstInitValList '}' {
+      $$ = $2;
+    }
+  ;
+
+ConstInitValList
+  : ConstInitVal {
+      std::vector<std::unique_ptr<InitValAST>> items;
+      items.emplace_back(TakeInitVal($1));
+      $$ = InitValAST::FromList(std::move(items)).release();
+    }
+  | ConstInitValList ',' ConstInitVal {
+      auto list = static_cast<InitValAST *>($1);
+      list->list.emplace_back(TakeInitVal($3));
+      $$ = list;
     }
   ;
 
@@ -325,24 +392,79 @@ VarDef
       std::unique_ptr<std::string> ident($1);
       def->ident = *ident;
 
-      def->init = TakeExpr($3);
+      def->init = TakeInitVal($3);
+
+      $$ = def.release();
+    }
+  | IDENT ArrayDims {
+      auto def = std::make_unique<VarDefAST>();
+
+      std::unique_ptr<std::string> ident($1);
+      def->ident = *ident;
+
+      auto dims = TakeExprVector($2);
+      def->dims = std::move(dims->exprs);
+
+      $$ = def.release();
+    }
+  | IDENT ArrayDims '=' InitVal {
+      auto def = std::make_unique<VarDefAST>();
+
+      std::unique_ptr<std::string> ident($1);
+      def->ident = *ident;
+
+      auto dims = TakeExprVector($2);
+      def->dims = std::move(dims->exprs);
+
+      def->init = TakeInitVal($4);
 
       $$ = def.release();
     }
   ;
 
+ArrayDims
+  : '[' ConstExp ']' {
+      auto dims = std::make_unique<ExprVectorAST>();
+      dims->exprs.emplace_back(TakeExpr($2));
+      $$ = dims.release();
+    }
+  | ArrayDims '[' ConstExp ']' {
+      auto dims = static_cast<ExprVectorAST *>($1);
+      dims->exprs.emplace_back(TakeExpr($3));
+      $$ = dims;
+    }
+  ;
+
 InitVal
   : Exp {
-      $$ = $1;
+      $$ = InitValAST::FromExpr(TakeExpr($1)).release();
+    }
+  | '{' '}' {
+      auto list = std::vector<std::unique_ptr<InitValAST>>();
+      $$ = InitValAST::FromList(std::move(list)).release();
+    }
+  | '{' InitValList '}' {
+      $$ = $2;
+    }
+  ;
+
+InitValList
+  : InitVal {
+      std::vector<std::unique_ptr<InitValAST>> items;
+      items.emplace_back(TakeInitVal($1));
+      $$ = InitValAST::FromList(std::move(items)).release();
+    }
+  | InitValList ',' InitVal {
+      auto list = static_cast<InitValAST *>($1);
+      list->list.emplace_back(TakeInitVal($3));
+      $$ = list;
     }
   ;
 
 Stmt
   : LVal '=' Exp ';' {
-      auto lval = TakeLVal($1);
-
       auto stmt = std::make_unique<AssignStmtAST>();
-      stmt->ident = lval->ident;
+      stmt->lval = TakeLVal($1);
       stmt->value = TakeExpr($3);
 
       $$ = stmt.release();
@@ -395,11 +517,34 @@ Stmt
     auto stmt = std::make_unique<ReturnStmtAST>();
     $$ = stmt.release();
   }
+  ;
 
 LVal
   : IDENT {
       std::unique_ptr<std::string> ident($1);
       $$ = new LValAST(*ident);
+    }
+  | IDENT ArrayIndices {
+      std::unique_ptr<std::string> ident($1);
+      auto lval = std::make_unique<LValAST>(*ident);
+
+      auto indices = TakeExprVector($2);
+      lval->indices = std::move(indices->exprs);
+
+      $$ = lval.release();
+    }
+  ;
+
+ArrayIndices
+  : '[' Exp ']' {
+      auto indices = std::make_unique<ExprVectorAST>();
+      indices->exprs.emplace_back(TakeExpr($2));
+      $$ = indices.release();
+    }
+  | ArrayIndices '[' Exp ']' {
+      auto indices = static_cast<ExprVectorAST *>($1);
+      indices->exprs.emplace_back(TakeExpr($3));
+      $$ = indices;
     }
   ;
 

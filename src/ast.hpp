@@ -57,6 +57,64 @@ class ExprListAST final : public BaseAST {
   }
 };
 
+class ExprVectorAST final : public BaseAST {
+ public:
+  std::vector<std::unique_ptr<ExprAST>> exprs;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "ExprVectorAST {\n";
+    for (const auto &expr : exprs) {
+      expr->Dump(os, indent + 2);
+      os << "\n";
+    }
+    PrintIndent(os, indent);
+    os << "}";
+  }
+};
+
+class InitValAST final : public BaseAST {
+ public:
+  bool is_list = false;
+  std::unique_ptr<ExprAST> expr;
+  std::vector<std::unique_ptr<InitValAST>> list;
+
+  static std::unique_ptr<InitValAST> FromExpr(std::unique_ptr<ExprAST> expr) {
+    auto node = std::make_unique<InitValAST>();
+    node->is_list = false;
+    node->expr = std::move(expr);
+    return node;
+  }
+
+  static std::unique_ptr<InitValAST> FromList(
+      std::vector<std::unique_ptr<InitValAST>> list) {
+    auto node = std::make_unique<InitValAST>();
+    node->is_list = true;
+    node->list = std::move(list);
+    return node;
+  }
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    if (!is_list) {
+      os << "InitValAST Expr {\n";
+      expr->Dump(os, indent + 2);
+      os << "\n";
+      PrintIndent(os, indent);
+      os << "}";
+      return;
+    }
+
+    os << "InitValAST List {\n";
+    for (const auto &item : list) {
+      item->Dump(os, indent + 2);
+      os << "\n";
+    }
+    PrintIndent(os, indent);
+    os << "}";
+  }
+};
+
 class NumberAST final : public ExprAST {
  public:
   explicit NumberAST(std::int64_t value) : value(value) {}
@@ -74,10 +132,22 @@ class LValAST final : public ExprAST {
   explicit LValAST(std::string ident) : ident(std::move(ident)) {}
 
   std::string ident;
+  std::vector<std::unique_ptr<ExprAST>> indices;
 
   void Dump(std::ostream &os, int indent = 0) const override {
     PrintIndent(os, indent);
-    os << "LValAST { ident: " << ident << " }";
+    os << "LValAST { ident: " << ident;
+
+    if (!indices.empty()) {
+      os << "\n";
+      for (const auto &index : indices) {
+        index->Dump(os, indent + 2);
+        os << "\n";
+      }
+      PrintIndent(os, indent);
+    }
+
+    os << "}";
   }
 };
 
@@ -223,13 +293,34 @@ class DeclAST : public BlockItemAST {
 class ConstDefAST final : public BaseAST {
  public:
   std::string ident;
-  std::unique_ptr<ExprAST> init;
+  std::vector<std::unique_ptr<ExprAST>> dims;
+  std::unique_ptr<InitValAST> init;
+
+  bool IsArray() const {
+    return !dims.empty();
+  }
 
   void Dump(std::ostream &os, int indent = 0) const override {
     PrintIndent(os, indent);
     os << "ConstDefAST { ident: " << ident << "\n";
-    init->Dump(os, indent + 2);
-    os << "\n";
+
+    if (!dims.empty()) {
+      PrintIndent(os, indent + 2);
+      os << "dims:\n";
+
+      for (const auto &dim : dims) {
+        dim->Dump(os, indent + 4);
+        os << "\n";
+      }
+    }
+
+    if (init) {
+      PrintIndent(os, indent + 2);
+      os << "init:\n";
+      init->Dump(os, indent + 4);
+      os << "\n";
+    }
+
     PrintIndent(os, indent);
     os << "}";
   }
@@ -254,20 +345,35 @@ class ConstDeclAST final : public DeclAST {
 class VarDefAST final : public BaseAST {
  public:
   std::string ident;
-  std::unique_ptr<ExprAST> init;  // nullptr 表示无初始化
+  std::vector<std::unique_ptr<ExprAST>> dims;
+  std::unique_ptr<InitValAST> init;  // nullptr 表示无初始化
+
+  bool IsArray() const {
+    return !dims.empty();
+  }
 
   void Dump(std::ostream &os, int indent = 0) const override {
     PrintIndent(os, indent);
-    os << "VarDefAST { ident: " << ident;
-    if (init) {
-      os << "\n";
-      init->Dump(os, indent + 2);
-      os << "\n";
-      PrintIndent(os, indent);
-      os << "}";
-    } else {
-      os << ", no init }";
+    os << "VarDefAST { ident: " << ident << "\n";
+
+    if (!dims.empty()) {
+      PrintIndent(os, indent + 2);
+      os << "dims:\n";
+      for (const auto &dim : dims) {
+        dim->Dump(os, indent + 4);
+        os << "\n";
+      }
     }
+
+    if (init) {
+      PrintIndent(os, indent + 2);
+      os << "init:\n";
+      init->Dump(os, indent + 4);
+      os << "\n";
+    }
+
+    PrintIndent(os, indent);
+    os << "}";
   }
 };
 
@@ -291,6 +397,8 @@ class FuncFParamAST final : public BaseAST {
  public:
   TypeKind type = TypeKind::Int;
   std::string ident;
+  bool is_array = false;
+  std::vector<std::unique_ptr<ExprAST>> dims;
 
   void Dump(std::ostream &os, int indent = 0) const override {
     PrintIndent(os, indent);
@@ -322,14 +430,19 @@ class StmtAST : public BlockItemAST {
 
 class AssignStmtAST final : public StmtAST {
  public:
-  std::string ident;
+  std::unique_ptr<LValAST> lval;
   std::unique_ptr<ExprAST> value;
 
   void Dump(std::ostream &os, int indent = 0) const override {
     PrintIndent(os, indent);
-    os << "AssignStmtAST { ident: " << ident << "\n";
+    os << "AssignStmtAST {\n";
+
+    lval->Dump(os, indent + 2);
+    os << "\n";
+
     value->Dump(os, indent + 2);
     os << "\n";
+
     PrintIndent(os, indent);
     os << "}";
   }
