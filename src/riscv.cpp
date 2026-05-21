@@ -7,14 +7,14 @@
 
 #include "koopa.h"
 
-/* lv3 : 不采用文档写法 ，每个 Koopa binary 结果分配一个栈槽
-计算时临时使用 t0 / t1
-算完后 sw 到栈上
-用到之前的结果时 lw 回来， 这样复杂表达式不会轻易耗尽t6*/
 namespace {
 
 int AlignTo(int value, int align) {
   return (value + align - 1) / align * align;
+}
+
+bool IsImm12(int value) {
+  return value >= -2048 && value <= 2047;
 }
 
 std::string StripKoopaNamePrefix(const char *name) {
@@ -80,11 +80,17 @@ class RawProgramVisitor {
     os_ << "  .globl " << func_name << "\n";
     os_ << func_name << ":\n";
 
-    if (stack_size_ > 0) {
-      os_ << "  addi sp, sp, -" << stack_size_ << "\n";
-    }
+    EmitAddSp(-stack_size_);
 
     Visit(func->bbs);
+  }
+
+  bool NeedStackSlot(const koopa_raw_value_t &value) const {
+    if (value->kind.tag == KOOPA_RVT_ALLOC) {
+      return true;
+    }
+
+    return value->ty->tag != KOOPA_RTT_UNIT;
   }
 
   void PrepareStackFrame(const koopa_raw_function_t &func) {
@@ -101,7 +107,7 @@ class RawProgramVisitor {
         auto value =
             reinterpret_cast<koopa_raw_value_t>(bb->insts.buffer[j]);
 
-        if (value->kind.tag == KOOPA_RVT_BINARY) {
+        if (NeedStackSlot(value)) {
           stack_offset_[value] = offset;
           offset += 4;
         }
@@ -109,6 +115,48 @@ class RawProgramVisitor {
     }
 
     stack_size_ = AlignTo(offset, 16);
+  }
+
+  int GetStackOffset(const koopa_raw_value_t &value) const {
+    auto it = stack_offset_.find(value);
+    if (it == stack_offset_.end()) {
+      throw std::runtime_error("value has no stack slot");
+    }
+
+    return it->second;
+  }
+
+  void EmitAddSp(int delta) {
+    if (delta == 0) {
+      return;
+    }
+
+    if (IsImm12(delta)) {
+      os_ << "  addi sp, sp, " << delta << "\n";
+    } else {
+      os_ << "  li t6, " << delta << "\n";
+      os_ << "  add sp, sp, t6\n";
+    }
+  }
+
+  void EmitLoadFromStack(const std::string &reg, int offset) {
+    if (IsImm12(offset)) {
+      os_ << "  lw " << reg << ", " << offset << "(sp)\n";
+    } else {
+      os_ << "  li t6, " << offset << "\n";
+      os_ << "  add t6, sp, t6\n";
+      os_ << "  lw " << reg << ", 0(t6)\n";
+    }
+  }
+
+  void EmitStoreToStack(const std::string &reg, int offset) {
+    if (IsImm12(offset)) {
+      os_ << "  sw " << reg << ", " << offset << "(sp)\n";
+    } else {
+      os_ << "  li t6, " << offset << "\n";
+      os_ << "  add t6, sp, t6\n";
+      os_ << "  sw " << reg << ", 0(t6)\n";
+    }
   }
 
   void Visit(const koopa_raw_basic_block_t &bb) {
@@ -119,6 +167,18 @@ class RawProgramVisitor {
     const auto &kind = value->kind;
 
     switch (kind.tag) {
+      case KOOPA_RVT_ALLOC:
+        VisitAlloc(value);
+        break;
+
+      case KOOPA_RVT_LOAD:
+        VisitLoad(value, kind.data.load);
+        break;
+
+      case KOOPA_RVT_STORE:
+        VisitStore(kind.data.store);
+        break;
+
       case KOOPA_RVT_RETURN:
         VisitReturn(kind.data.ret);
         break;
@@ -128,25 +188,27 @@ class RawProgramVisitor {
         break;
 
       default:
-        throw std::runtime_error("unsupported Koopa value kind in Lv3");
+        throw std::runtime_error("unsupported Koopa value kind in Lv4");
     }
+  }
+
+  void VisitAlloc(const koopa_raw_value_t &value) {
+      (void)value;
+    // alloc 只代表一块栈内存。栈槽已经在 PrepareStackFrame 中分配好了。
+    // 因此真正生成汇编时，这里不需要输出任何指令。
   }
 
   void LoadValue(const koopa_raw_value_t &value, const std::string &reg) {
     switch (value->kind.tag) {
       case KOOPA_RVT_INTEGER:
-        os_ << "  li " << reg << ", " << value->kind.data.integer.value << "\n";
+        os_ << "  li " << reg << ", " << value->kind.data.integer.value
+            << "\n";
         break;
 
-      case KOOPA_RVT_BINARY: {
-        auto it = stack_offset_.find(value);
-        if (it == stack_offset_.end()) {
-          throw std::runtime_error("binary value has no stack slot");
-        }
-
-        os_ << "  lw " << reg << ", " << it->second << "(sp)\n";
+      case KOOPA_RVT_BINARY:
+      case KOOPA_RVT_LOAD:
+        EmitLoadFromStack(reg, GetStackOffset(value));
         break;
-      }
 
       default:
         throw std::runtime_error("unsupported value used as operand");
@@ -154,12 +216,21 @@ class RawProgramVisitor {
   }
 
   void StoreValue(const koopa_raw_value_t &value, const std::string &reg) {
-    auto it = stack_offset_.find(value);
-    if (it == stack_offset_.end()) {
-      throw std::runtime_error("value has no stack slot");
-    }
+    EmitStoreToStack(reg, GetStackOffset(value));
+  }
 
-    os_ << "  sw " << reg << ", " << it->second << "(sp)\n";
+  void VisitLoad(const koopa_raw_value_t &value,
+                 const koopa_raw_load_t &load) {
+    int src_offset = GetStackOffset(load.src);
+    EmitLoadFromStack("t0", src_offset);
+    StoreValue(value, "t0");
+  }
+
+  void VisitStore(const koopa_raw_store_t &store) {
+    LoadValue(store.value, "t0");
+
+    int dest_offset = GetStackOffset(store.dest);
+    EmitStoreToStack("t0", dest_offset);
   }
 
   void VisitReturn(const koopa_raw_return_t &ret) {
@@ -167,9 +238,7 @@ class RawProgramVisitor {
       LoadValue(ret.value, "a0");
     }
 
-    if (stack_size_ > 0) {
-      os_ << "  addi sp, sp, " << stack_size_ << "\n";
-    }
+    EmitAddSp(stack_size_);
 
     os_ << "  ret\n";
   }
@@ -237,7 +306,7 @@ class RawProgramVisitor {
         break;
 
       default:
-        throw std::runtime_error("unsupported binary operator in Lv3");
+        throw std::runtime_error("unsupported binary operator in Lv4");
     }
 
     StoreValue(value, "t0");

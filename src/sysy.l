@@ -54,6 +54,7 @@ Hexadecimal   0[xX][0-9a-fA-F]+
                        std::exit(1);
                      }
 
+"const"             { return CONST; }
 "int"               { return INT; }
 "return"            { return RETURN; }
 

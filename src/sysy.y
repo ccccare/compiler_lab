@@ -20,12 +20,24 @@ static std::unique_ptr<ExprAST> TakeExpr(BaseAST *ptr) {
   return std::unique_ptr<ExprAST>(static_cast<ExprAST *>(ptr));
 }
 
+static std::unique_ptr<LValAST> TakeLVal(BaseAST *ptr) {
+  return std::unique_ptr<LValAST>(static_cast<LValAST *>(ptr));
+}
+
 static std::unique_ptr<BlockAST> TakeBlock(BaseAST *ptr) {
   return std::unique_ptr<BlockAST>(static_cast<BlockAST *>(ptr));
 }
 
 static std::unique_ptr<BlockItemAST> TakeBlockItem(BaseAST *ptr) {
   return std::unique_ptr<BlockItemAST>(static_cast<BlockItemAST *>(ptr));
+}
+
+static std::unique_ptr<ConstDefAST> TakeConstDef(BaseAST *ptr) {
+  return std::unique_ptr<ConstDefAST>(static_cast<ConstDefAST *>(ptr));
+}
+
+static std::unique_ptr<VarDefAST> TakeVarDef(BaseAST *ptr) {
+  return std::unique_ptr<VarDefAST>(static_cast<VarDefAST *>(ptr));
 }
 %}
 
@@ -37,13 +49,16 @@ static std::unique_ptr<BlockItemAST> TakeBlockItem(BaseAST *ptr) {
   BaseAST *ast_val;
 }
 
-%token INT RETURN
+%token CONST INT RETURN
 %token LE GE EQ NE LAND LOR
 
 %token <str_val> IDENT
 %token <int_val> INT_CONST
 
-%type <ast_val> FuncDef Block Stmt
+%type <ast_val> FuncDef Block BlockItemList BlockItem
+%type <ast_val> Decl ConstDecl ConstDefList ConstDef ConstInitVal ConstExp
+%type <ast_val> VarDecl VarDefList VarDef InitVal
+%type <ast_val> Stmt LVal
 %type <ast_val> Exp LOrExp LAndExp EqExp RelExp AddExp MulExp UnaryExp PrimaryExp Number
 
 %%
@@ -73,18 +88,155 @@ FuncDef
   ;
 
 Block
-  : '{' Stmt '}' {
-      auto block = std::make_unique<BlockAST>();
+  : '{' BlockItemList '}' {
+      $$ = $2;
+    }
+  ;
+
+BlockItemList
+  : /* empty */ {
+      $$ = new BlockAST();
+    }
+  | BlockItemList BlockItem {
+      auto block = static_cast<BlockAST *>($1);
       block->items.emplace_back(TakeBlockItem($2));
-      $$ = block.release();
+      $$ = block;
+    }
+  ;
+
+BlockItem
+  : Decl {
+      $$ = $1;
+    }
+  | Stmt {
+      $$ = $1;
+    }
+  ;
+
+Decl
+  : ConstDecl {
+      $$ = $1;
+    }
+  | VarDecl {
+      $$ = $1;
+    }
+  ;
+
+ConstDecl
+  : CONST BType ConstDefList ';' {
+      $$ = $3;
+    }
+  ;
+
+BType
+  : INT
+  ;
+
+ConstDefList
+  : ConstDef {
+      auto decl = std::make_unique<ConstDeclAST>();
+      decl->defs.emplace_back(TakeConstDef($1));
+      $$ = decl.release();
+    }
+  | ConstDefList ',' ConstDef {
+      auto decl = static_cast<ConstDeclAST *>($1);
+      decl->defs.emplace_back(TakeConstDef($3));
+      $$ = decl;
+    }
+  ;
+
+ConstDef
+  : IDENT '=' ConstInitVal {
+      auto def = std::make_unique<ConstDefAST>();
+
+      std::unique_ptr<std::string> ident($1);
+      def->ident = *ident;
+
+      def->init = TakeExpr($3);
+
+      $$ = def.release();
+    }
+  ;
+
+ConstInitVal
+  : ConstExp {
+      $$ = $1;
+    }
+  ;
+
+ConstExp
+  : Exp {
+      $$ = $1;
+    }
+  ;
+
+VarDecl
+  : BType VarDefList ';' {
+      $$ = $2;
+    }
+  ;
+
+VarDefList
+  : VarDef {
+      auto decl = std::make_unique<VarDeclAST>();
+      decl->defs.emplace_back(TakeVarDef($1));
+      $$ = decl.release();
+    }
+  | VarDefList ',' VarDef {
+      auto decl = static_cast<VarDeclAST *>($1);
+      decl->defs.emplace_back(TakeVarDef($3));
+      $$ = decl;
+    }
+  ;
+
+VarDef
+  : IDENT {
+      auto def = std::make_unique<VarDefAST>();
+
+      std::unique_ptr<std::string> ident($1);
+      def->ident = *ident;
+
+      $$ = def.release();
+    }
+  | IDENT '=' InitVal {
+      auto def = std::make_unique<VarDefAST>();
+
+      std::unique_ptr<std::string> ident($1);
+      def->ident = *ident;
+
+      def->init = TakeExpr($3);
+
+      $$ = def.release();
+    }
+  ;
+
+InitVal
+  : Exp {
+      $$ = $1;
     }
   ;
 
 Stmt
-  : RETURN Exp ';' {
+  : LVal '=' Exp ';' {
+      auto lval = TakeLVal($1);
+
+      auto stmt = std::make_unique<AssignStmtAST>();
+      stmt->ident = lval->ident;
+      stmt->value = TakeExpr($3);
+
+      $$ = stmt.release();
+    }
+  | RETURN Exp ';' {
       auto stmt = std::make_unique<ReturnStmtAST>();
       stmt->value = TakeExpr($2);
       $$ = stmt.release();
+    }
+  ;
+
+LVal
+  : IDENT {
+      std::unique_ptr<std::string> ident($1);
+      $$ = new LValAST(*ident);
     }
   ;
 
@@ -187,6 +339,9 @@ UnaryExp
 PrimaryExp
   : '(' Exp ')' {
       $$ = $2;
+    }
+  | LVal {
+      $$ = $1;
     }
   | Number {
       $$ = $1;

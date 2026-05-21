@@ -48,6 +48,18 @@ class NumberAST final : public ExprAST {
   }
 };
 
+class LValAST final : public ExprAST {
+ public:
+  explicit LValAST(std::string ident) : ident(std::move(ident)) {}
+
+  std::string ident;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "LValAST { ident: " << ident << " }";
+  }
+};
+
 enum class UnaryOp {
   Plus,
   Minus,
@@ -165,9 +177,96 @@ class BlockItemAST : public BaseAST {
   ~BlockItemAST() override = default;
 };
 
+class DeclAST : public BlockItemAST {
+ public:
+  ~DeclAST() override = default;
+};
+
+class ConstDefAST final : public BaseAST {
+ public:
+  std::string ident;
+  std::unique_ptr<ExprAST> init;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "ConstDefAST { ident: " << ident << "\n";
+    init->Dump(os, indent + 2);
+    os << "\n";
+    PrintIndent(os, indent);
+    os << "}";
+  }
+};
+
+class ConstDeclAST final : public DeclAST {
+ public:
+  std::vector<std::unique_ptr<ConstDefAST>> defs;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "ConstDeclAST {\n";
+    for (const auto &def : defs) {
+      def->Dump(os, indent + 2);
+      os << "\n";
+    }
+    PrintIndent(os, indent);
+    os << "}";
+  }
+};
+
+class VarDefAST final : public BaseAST {
+ public:
+  std::string ident;
+  std::unique_ptr<ExprAST> init;  // nullptr 表示无初始化
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "VarDefAST { ident: " << ident;
+    if (init) {
+      os << "\n";
+      init->Dump(os, indent + 2);
+      os << "\n";
+      PrintIndent(os, indent);
+      os << "}";
+    } else {
+      os << ", no init }";
+    }
+  }
+};
+
+class VarDeclAST final : public DeclAST {
+ public:
+  std::vector<std::unique_ptr<VarDefAST>> defs;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "VarDeclAST {\n";
+    for (const auto &def : defs) {
+      def->Dump(os, indent + 2);
+      os << "\n";
+    }
+    PrintIndent(os, indent);
+    os << "}";
+  }
+};
+
 class StmtAST : public BlockItemAST {
  public:
   ~StmtAST() override = default;
+};
+
+class AssignStmtAST final : public StmtAST {
+ public:
+  std::string ident;
+  std::unique_ptr<ExprAST> value;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "AssignStmtAST { ident: " << ident << "\n";
+    value->Dump(os, indent + 2);
+    os << "\n";
+    PrintIndent(os, indent);
+    os << "}";
+  }
 };
 
 class ReturnStmtAST final : public StmtAST {
