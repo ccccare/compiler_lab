@@ -354,8 +354,7 @@ std::string KoopaGenerator::GenerateExpr(const ExprAST &ast) {
   }
 
   if (const auto *binary = dynamic_cast<const BinaryExprAST *>(&ast)) {
-    std::string lhs = GenerateExpr(*binary->lhs);
-    std::string rhs = GenerateExpr(*binary->rhs);
+    
 
     if (binary->op == BinaryOp::LAnd) {
       return GenerateLogicalAnd(*binary);
@@ -364,6 +363,9 @@ std::string KoopaGenerator::GenerateExpr(const ExprAST &ast) {
     if (binary->op == BinaryOp::LOr) {
       return GenerateLogicalOr(*binary);
     }
+
+    std::string lhs = GenerateExpr(*binary->lhs);
+    std::string rhs = GenerateExpr(*binary->rhs);
 
     std::string op;
 
