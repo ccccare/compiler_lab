@@ -80,41 +80,89 @@ void KoopaGenerator::Generate(const BaseAST &ast) {
   GenerateCompUnit(*comp_unit);
 }
 
-void KoopaGenerator::GenerateCompUnit(const CompUnitAST &ast) {
-  if (!ast.func_def) {
-    throw std::runtime_error("CompUnitAST has no function definition");
+void KoopaGenerator::GenerateCompUnitItem(const BaseAST &ast) {
+  if (const auto *decl = dynamic_cast<const DeclAST *>(&ast)) {
+    GenerateGlobalDecl(*decl);
+    return;
   }
 
-  GenerateFuncDef(*ast.func_def);
+  if (const auto *func = dynamic_cast<const FuncDefAST *>(&ast)) {
+    GenerateFuncDef(*func);
+    return;
+  }
+
+  throw std::runtime_error("unsupported comp unit item");
+}
+
+void KoopaGenerator::GenerateCompUnit(const CompUnitAST &ast) {
+  scopes_.clear();
+  EnterScope();  // 全局作用域
+
+  EmitLibraryDecls();
+  InsertLibraryFunctions();
+  PredeclareFunctions(ast);
+
+  for (const auto &item : ast.items) {
+    GenerateCompUnitItem(*item);
+  }
 }
 
 void KoopaGenerator::GenerateFuncDef(const FuncDefAST &ast) {
-  if (ast.ident != "main") {
-    throw std::runtime_error("Lv6 only supports function named main");
-  }
-
-  if (ast.ret_type != TypeKind::Int) {
-    throw std::runtime_error("Lv6 only supports int main()");
-  }
-
   temp_id_ = 0;
   var_id_ = 0;
   block_id_ = 0;
   current_block_terminated_ = false;
-  scopes_.clear();
   loop_stack_.clear();
+  current_func_ret_type_ = ast.ret_type;
 
-  os_ << "fun @" << ast.ident << "(): i32 {\n";
+  os_ << "fun @" << ast.ident << "(";
+
+  for (size_t i = 0; i < ast.params.size(); ++i) {
+    if (i != 0) {
+      os_ << ", ";
+    }
+    os_ << "%p" << i << ": i32";
+  }
+
+  os_ << ")";
+
+  if (ast.ret_type == TypeKind::Int) {
+    os_ << ": i32";
+  }
+
+  os_ << " {\n";
   os_ << "%entry:\n";
+
+  // 函数参数作用域
+  EnterScope();
+
+  for (size_t i = 0; i < ast.params.size(); ++i) {
+    const auto &param = ast.params[i];
+
+    std::string var_name = NewVar();
+    os_ << "  " << var_name << " = alloc i32\n";
+    os_ << "  store %p" << i << ", " << var_name << "\n";
+
+    SymbolInfo info;
+    info.kind = SymbolKind::Var;
+    info.ir_name = var_name;
+
+    InsertSymbol(param->ident, info);
+  }
 
   GenerateBlock(*ast.block);
 
-  // 合法测试一般会有 return。这里补一个 ret 0，避免生成没有终结指令的 Koopa 基本块。
+  ExitScope();
+
   if (!current_block_terminated_) {
-    os_ << "  ret 0\n";
+    if (ast.ret_type == TypeKind::Void) {
+      os_ << "  ret\n";
+    } else {
+      os_ << "  ret 0\n";
+    }
   }
 
-  os_ << "}\n";
+  os_ << "}\n\n";
 }
 
 void KoopaGenerator::GenerateBlock(const BlockAST &ast) {
@@ -324,8 +372,13 @@ void KoopaGenerator::GenerateStmt(const StmtAST &ast) {
   }
 
   if (const auto *ret_stmt = dynamic_cast<const ReturnStmtAST *>(&ast)) {
-    std::string ret_value = GenerateExpr(*ret_stmt->value);
-    os_ << "  ret " << ret_value << "\n";
+    if (ret_stmt->value) {
+      std::string ret_value = GenerateExpr(*ret_stmt->value);
+      os_ << "  ret " << ret_value << "\n";
+    } else {
+      os_ << "  ret\n";
+    }
+
     current_block_terminated_ = true;
     return;
   }
@@ -387,6 +440,138 @@ std::string KoopaGenerator::GenerateLogicalOr(const BinaryExprAST &ast) {
   return result;
 }
 
+// lv 8
+void KoopaGenerator::EmitLibraryDecls() {
+  os_ << "decl @getint(): i32\n";
+  os_ << "decl @getch(): i32\n";
+  os_ << "decl @getarray(*i32): i32\n";
+  os_ << "decl @putint(i32)\n";
+  os_ << "decl @putch(i32)\n";
+  os_ << "decl @putarray(i32, *i32)\n";
+  os_ << "decl @starttime()\n";
+  os_ << "decl @stoptime()\n\n";
+}
+
+void KoopaGenerator::InsertLibraryFunctions() {
+  auto insert_func = [this](const std::string &name,
+                            TypeKind ret,
+                            std::vector<TypeKind> params) {
+    SymbolInfo info;
+    info.kind = SymbolKind::Func;
+    info.return_type = ret;
+    info.param_types = std::move(params);
+    InsertSymbol(name, info);
+  };
+
+  insert_func("getint", TypeKind::Int, {});
+  insert_func("getch", TypeKind::Int, {});
+  insert_func("putint", TypeKind::Void, {TypeKind::Int});
+  insert_func("putch", TypeKind::Void, {TypeKind::Int});
+  insert_func("starttime", TypeKind::Void, {});
+  insert_func("stoptime", TypeKind::Void, {});
+}
+
+void KoopaGenerator::PredeclareFunctions(const CompUnitAST &ast) {
+  for (const auto &item : ast.items) {
+    const auto *func = dynamic_cast<const FuncDefAST *>(item.get());
+    if (!func) {
+      continue;
+    }
+
+    SymbolInfo info;
+    info.kind = SymbolKind::Func;
+    info.return_type = func->ret_type;
+
+    for (const auto &param : func->params) {
+      info.param_types.push_back(param->type);
+    }
+
+    InsertSymbol(func->ident, info);
+  }
+}
+
+void KoopaGenerator::GenerateGlobalDecl(const DeclAST &ast) {
+  if (const auto *const_decl = dynamic_cast<const ConstDeclAST *>(&ast)) {
+    GenerateGlobalConstDecl(*const_decl);
+    return;
+  }
+
+  if (const auto *var_decl = dynamic_cast<const VarDeclAST *>(&ast)) {
+    GenerateGlobalVarDecl(*var_decl);
+    return;
+  }
+
+  throw std::runtime_error("unsupported global declaration");
+}
+
+void KoopaGenerator::GenerateGlobalConstDecl(const ConstDeclAST &ast) {
+  for (const auto &def : ast.defs) {
+    std::int32_t value = EvalConstExpr(*def->init);
+
+    SymbolInfo info;
+    info.kind = SymbolKind::Const;
+    info.const_value = value;
+
+    InsertSymbol(def->ident, info);
+  }
+}
+
+void KoopaGenerator::GenerateGlobalVarDecl(const VarDeclAST &ast) {
+  for (const auto &def : ast.defs) {
+    std::string global_name = "@" + def->ident;
+
+    if (def->init) {
+      std::int32_t value = EvalConstExpr(*def->init);
+      os_ << "global " << global_name << " = alloc i32, " << value << "\n";
+    } else {
+      os_ << "global " << global_name << " = alloc i32, zeroinit\n";
+    }
+
+    SymbolInfo info;
+    info.kind = SymbolKind::Var;
+    info.ir_name = global_name;
+
+    InsertSymbol(def->ident, info);
+  }
+
+  os_ << "\n";
+}
+
+std::string KoopaGenerator::GenerateCallExpr(const CallExprAST &ast) {
+  const SymbolInfo &symbol = LookupSymbol(ast.ident);
+
+  if (symbol.kind != SymbolKind::Func) {
+    throw std::runtime_error("called object is not a function: " + ast.ident);
+  }
+
+  if (symbol.param_types.size() != ast.args.size()) {
+    throw std::runtime_error("wrong number of arguments in call: " + ast.ident);
+  }
+
+  std::vector<std::string> args;
+  for (const auto &arg : ast.args) {
+    args.push_back(GenerateExpr(*arg));
+  }
+
+  std::string call_text = "call @" + ast.ident + "(";
+  for (size_t i = 0; i < args.size(); ++i) {
+    if (i != 0) {
+      call_text += ", ";
+    }
+    call_text += args[i];
+  }
+  call_text += ")";
+
+  if (symbol.return_type == TypeKind::Void) {
+    os_ << "  " << call_text << "\n";
+    return "";
+  }
+
+  std::string result = NewTemp();
+  os_ << "  " << result << " = " << call_text << "\n";
+  return result;
+}
+
 std::string KoopaGenerator::GenerateExpr(const ExprAST &ast) {
   if (const auto *number = dynamic_cast<const NumberAST *>(&ast)) {
     return std::to_string(number->value);
@@ -423,6 +608,10 @@ std::string KoopaGenerator::GenerateExpr(const ExprAST &ast) {
         return result;
       }
     }
+  }
+
+  if (const auto *call = dynamic_cast<const CallExprAST *>(&ast)) {
+    return GenerateCallExpr(*call);
   }
 
   if (const auto *binary = dynamic_cast<const BinaryExprAST *>(&ast)) {

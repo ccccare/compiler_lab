@@ -39,6 +39,20 @@ static std::unique_ptr<ConstDefAST> TakeConstDef(BaseAST *ptr) {
 static std::unique_ptr<VarDefAST> TakeVarDef(BaseAST *ptr) {
   return std::unique_ptr<VarDefAST>(static_cast<VarDefAST *>(ptr));
 }
+
+static std::unique_ptr<FuncFParamAST> TakeFuncFParam(BaseAST *ptr) {
+  return std::unique_ptr<FuncFParamAST>(static_cast<FuncFParamAST *>(ptr));
+}
+
+static std::unique_ptr<FuncFParamListAST> TakeFuncFParamList(BaseAST *ptr) {
+  return std::unique_ptr<FuncFParamListAST>(
+      static_cast<FuncFParamListAST *>(ptr));
+}
+
+static std::unique_ptr<ExprListAST> TakeExprList(BaseAST *ptr) {
+  return std::unique_ptr<ExprListAST>(static_cast<ExprListAST *>(ptr));
+}
+
 %}
 
 %parse-param { std::unique_ptr<BaseAST> &ast }
@@ -49,7 +63,7 @@ static std::unique_ptr<VarDefAST> TakeVarDef(BaseAST *ptr) {
   BaseAST *ast_val;
 }
 
-%token CONST INT RETURN IF ELSE WHILE BREAK CONTINUE
+%token CONST INT VOID RETURN IF ELSE WHILE BREAK CONTINUE
 %token LE GE EQ NE LAND LOR
 
 %token <str_val> IDENT
@@ -63,15 +77,39 @@ static std::unique_ptr<VarDefAST> TakeVarDef(BaseAST *ptr) {
 %type <ast_val> VarDecl VarDefList VarDef InitVal
 %type <ast_val> Stmt LVal
 %type <ast_val> Exp LOrExp LAndExp EqExp RelExp AddExp MulExp UnaryExp PrimaryExp Number
+%type <ast_val> CompUnitItem CompUnitItemList
+%type <ast_val> FuncFParams FuncFParam
+%type <ast_val> FuncRParams
 
 %%
 
 CompUnit
-  : FuncDef {
+  : CompUnitItemList {
+      ast = std::unique_ptr<BaseAST>(static_cast<BaseAST *>($1));
+    }
+  ;
+
+CompUnitItemList
+  : CompUnitItem {
       auto comp_unit = std::make_unique<CompUnitAST>();
-      comp_unit->func_def =
-          std::unique_ptr<FuncDefAST>(static_cast<FuncDefAST *>($1));
-      ast = std::move(comp_unit);
+      comp_unit->items.emplace_back(
+          std::unique_ptr<BaseAST>(static_cast<BaseAST *>($1)));
+      $$ = comp_unit.release();
+    }
+  | CompUnitItemList CompUnitItem {
+      auto comp_unit = static_cast<CompUnitAST *>($1);
+      comp_unit->items.emplace_back(
+          std::unique_ptr<BaseAST>(static_cast<BaseAST *>($2)));
+      $$ = comp_unit;
+    }
+  ;
+
+CompUnitItem
+  : Decl {
+      $$ = $1;
+    }
+  | FuncDef {
+      $$ = $1;
     }
   ;
 
@@ -87,6 +125,86 @@ FuncDef
       func->block = TakeBlock($5);
 
       $$ = func.release();
+    }
+  | INT IDENT '(' FuncFParams ')' Block {
+      auto func = std::make_unique<FuncDefAST>();
+
+      func->ret_type = TypeKind::Int;
+
+      std::unique_ptr<std::string> ident($2);
+      func->ident = *ident;
+
+      auto params = TakeFuncFParamList($4);
+      func->params = std::move(params->params);
+
+      func->block = TakeBlock($6);
+
+      $$ = func.release();
+    }
+  | VOID IDENT '(' ')' Block {
+      auto func = std::make_unique<FuncDefAST>();
+
+      func->ret_type = TypeKind::Void;
+
+      std::unique_ptr<std::string> ident($2);
+      func->ident = *ident;
+
+      func->block = TakeBlock($5);
+
+      $$ = func.release();
+    }
+  | VOID IDENT '(' FuncFParams ')' Block {
+      auto func = std::make_unique<FuncDefAST>();
+
+      func->ret_type = TypeKind::Void;
+
+      std::unique_ptr<std::string> ident($2);
+      func->ident = *ident;
+
+      auto params = TakeFuncFParamList($4);
+      func->params = std::move(params->params);
+
+      func->block = TakeBlock($6);
+
+      $$ = func.release();
+    }
+  ;
+
+FuncFParams
+  : FuncFParam {
+      auto list = std::make_unique<FuncFParamListAST>();
+      list->params.emplace_back(TakeFuncFParam($1));
+      $$ = list.release();
+    }
+  | FuncFParams ',' FuncFParam {
+      auto list = static_cast<FuncFParamListAST *>($1);
+      list->params.emplace_back(TakeFuncFParam($3));
+      $$ = list;
+    }
+  ;
+
+FuncFParam
+  : INT IDENT {
+      auto param = std::make_unique<FuncFParamAST>();
+      param->type = TypeKind::Int;
+
+      std::unique_ptr<std::string> ident($2);
+      param->ident = *ident;
+
+      $$ = param.release();
+    }
+  ;
+
+FuncRParams
+  : Exp {
+      auto list = std::make_unique<ExprListAST>();
+      list->exprs.emplace_back(TakeExpr($1));
+      $$ = list.release();
+    }
+  | FuncRParams ',' Exp {
+      auto list = static_cast<ExprListAST *>($1);
+      list->exprs.emplace_back(TakeExpr($3));
+      $$ = list;
     }
   ;
 
@@ -126,7 +244,7 @@ Decl
   ;
 
 ConstDecl
-  : CONST BType ConstDefList ';' {
+  : CONST INT ConstDefList ';' {
       $$ = $3;
     }
   ;
@@ -174,7 +292,7 @@ ConstExp
   ;
 
 VarDecl
-  : BType VarDefList ';' {
+  : INT VarDefList ';' {
       $$ = $2;
     }
   ;
@@ -269,11 +387,14 @@ Stmt
     $$ = new ContinueStmtAST();
   }
   | RETURN Exp ';' {
-      auto stmt = std::make_unique<ReturnStmtAST>();
-      stmt->value = TakeExpr($2);
-      $$ = stmt.release();
-    }
-  ;
+    auto stmt = std::make_unique<ReturnStmtAST>();
+    stmt->value = TakeExpr($2);
+    $$ = stmt.release();
+  }
+  | RETURN ';' {
+    auto stmt = std::make_unique<ReturnStmtAST>();
+    $$ = stmt.release();
+  }
 
 LVal
   : IDENT {
@@ -366,6 +487,25 @@ MulExp
 UnaryExp
   : PrimaryExp {
       $$ = $1;
+    }
+  | IDENT '(' ')' {
+      auto call = std::make_unique<CallExprAST>();
+
+      std::unique_ptr<std::string> ident($1);
+      call->ident = *ident;
+
+      $$ = call.release();
+    }
+  | IDENT '(' FuncRParams ')' {
+      auto call = std::make_unique<CallExprAST>();
+
+      std::unique_ptr<std::string> ident($1);
+      call->ident = *ident;
+
+      auto args = TakeExprList($3);
+      call->args = std::move(args->exprs);
+
+      $$ = call.release();
     }
   | '+' UnaryExp {
       $$ = new UnaryExprAST(UnaryOp::Plus, TakeExpr($2));

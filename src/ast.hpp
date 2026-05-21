@@ -11,12 +11,15 @@ class BlockAST;
 
 enum class TypeKind {
   Int,
+  Void,
 };
 
 inline const char *TypeName(TypeKind type) {
   switch (type) {
     case TypeKind::Int:
       return "int";
+    case TypeKind::Void:
+      return "void";
   }
   return "<unknown>";
 }
@@ -36,6 +39,22 @@ class BaseAST {
 class ExprAST : public BaseAST {
  public:
   ~ExprAST() override = default;
+};
+
+class ExprListAST final : public BaseAST {
+ public:
+  std::vector<std::unique_ptr<ExprAST>> exprs;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "ExprListAST {\n";
+    for (const auto &expr : exprs) {
+      expr->Dump(os, indent + 2);
+      os << "\n";
+    }
+    PrintIndent(os, indent);
+    os << "}";
+  }
 };
 
 class NumberAST final : public ExprAST {
@@ -174,6 +193,23 @@ class BinaryExprAST final : public ExprAST {
   }
 };
 
+class CallExprAST final : public ExprAST {
+ public:
+  std::string ident;
+  std::vector<std::unique_ptr<ExprAST>> args;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "CallExprAST { ident: " << ident << "\n";
+    for (const auto &arg : args) {
+      arg->Dump(os, indent + 2);
+      os << "\n";
+    }
+    PrintIndent(os, indent);
+    os << "}";
+  }
+};
+
 class BlockItemAST : public BaseAST {
  public:
   ~BlockItemAST() override = default;
@@ -251,6 +287,34 @@ class VarDeclAST final : public DeclAST {
   }
 };
 
+class FuncFParamAST final : public BaseAST {
+ public:
+  TypeKind type = TypeKind::Int;
+  std::string ident;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "FuncFParamAST { type: " << TypeName(type)
+       << ", ident: " << ident << " }";
+  }
+};
+
+class FuncFParamListAST final : public BaseAST {
+ public:
+  std::vector<std::unique_ptr<FuncFParamAST>> params;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "FuncFParamListAST {\n";
+    for (const auto &param : params) {
+      param->Dump(os, indent + 2);
+      os << "\n";
+    }
+    PrintIndent(os, indent);
+    os << "}";
+  }
+};
+
 class StmtAST : public BlockItemAST {
  public:
   ~StmtAST() override = default;
@@ -293,18 +357,23 @@ class ExprStmtAST final : public StmtAST {
 };
 
 
-
 class ReturnStmtAST final : public StmtAST {
  public:
-  std::unique_ptr<ExprAST> value;
+  std::unique_ptr<ExprAST> value;  // nullptr 表示 return;
 
   void Dump(std::ostream &os, int indent = 0) const override {
     PrintIndent(os, indent);
-    os << "ReturnStmtAST {\n";
-    value->Dump(os, indent + 2);
-    os << "\n";
-    PrintIndent(os, indent);
-    os << "}";
+    os << "ReturnStmtAST {";
+
+    if (value) {
+      os << "\n";
+      value->Dump(os, indent + 2);
+      os << "\n";
+      PrintIndent(os, indent);
+      os << "}";
+    } else {
+      os << " void }";
+    }
   }
 };
 
@@ -416,6 +485,7 @@ class FuncDefAST final : public BaseAST {
  public:
   TypeKind ret_type = TypeKind::Int;
   std::string ident;
+  std::vector<std::unique_ptr<FuncFParamAST>> params;
   std::unique_ptr<BlockAST> block;
 
   void Dump(std::ostream &os, int indent = 0) const override {
@@ -428,6 +498,13 @@ class FuncDefAST final : public BaseAST {
     PrintIndent(os, indent + 2);
     os << "ident: " << ident << "\n";
 
+    PrintIndent(os, indent + 2);
+    os << "params:\n";
+    for (const auto &param : params) {
+      param->Dump(os, indent + 4);
+      os << "\n";
+    }
+
     block->Dump(os, indent + 2);
     os << "\n";
 
@@ -438,13 +515,15 @@ class FuncDefAST final : public BaseAST {
 
 class CompUnitAST final : public BaseAST {
  public:
-  std::unique_ptr<FuncDefAST> func_def;
+  std::vector<std::unique_ptr<BaseAST>> items;
 
   void Dump(std::ostream &os, int indent = 0) const override {
     PrintIndent(os, indent);
     os << "CompUnitAST {\n";
-    func_def->Dump(os, indent + 2);
-    os << "\n";
+    for (const auto &item : items) {
+      item->Dump(os, indent + 2);
+      os << "\n";
+    }
     PrintIndent(os, indent);
     os << "}";
   }

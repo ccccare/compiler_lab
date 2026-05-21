@@ -18,17 +18,25 @@ class KoopaGenerator {
   enum class SymbolKind {
     Const,
     Var,
+    Func,
   };
 
   struct SymbolInfo {
     SymbolKind kind = SymbolKind::Const;
+
     std::int32_t const_value = 0;
+
+    // Var: 变量对应的 Koopa 地址，例如 %v0 或 @g
     std::string ir_name;
+
+    // Func:
+    TypeKind return_type = TypeKind::Int;
+    std::vector<TypeKind> param_types;
   };
 
   struct LoopInfo {
-  std::string continue_label;
-  std::string break_label;
+    std::string continue_label;
+    std::string break_label;
   };
 
   std::ostream &os_;
@@ -37,6 +45,7 @@ class KoopaGenerator {
   int var_id_ = 0;
   bool current_block_terminated_ = false;
   int block_id_ = 0;
+  TypeKind current_func_ret_type_ = TypeKind::Int;
 
   std::vector<std::unordered_map<std::string, SymbolInfo>> scopes_;
   std::vector<LoopInfo> loop_stack_;
@@ -70,6 +79,17 @@ class KoopaGenerator {
   void GenerateConstDecl(const ConstDeclAST &ast);
   void GenerateVarDecl(const VarDeclAST &ast);
   void GenerateStmt(const StmtAST &ast);
+
+  void EmitLibraryDecls();
+  void InsertLibraryFunctions();
+  void PredeclareFunctions(const CompUnitAST &ast);
+
+  void GenerateCompUnitItem(const BaseAST &ast);
+  void GenerateGlobalDecl(const DeclAST &ast);
+  void GenerateGlobalConstDecl(const ConstDeclAST &ast);
+  void GenerateGlobalVarDecl(const VarDeclAST &ast);
+
+  std::string GenerateCallExpr(const CallExprAST &ast);
 
   std::string GenerateExpr(const ExprAST &ast);
 
