@@ -49,6 +49,8 @@ class RawProgramVisitor {
 
   std::unordered_map<koopa_raw_value_t, int> stack_offset_;
 
+  std::string current_func_name_;
+
   void Visit(const koopa_raw_slice_t &slice) {
     for (size_t i = 0; i < slice.len; ++i) {
       const void *ptr = slice.buffer[i];
@@ -81,6 +83,7 @@ class RawProgramVisitor {
     PrepareStackFrame(func);
 
     std::string func_name = StripKoopaNamePrefix(func->name);
+    current_func_name_ = func_name;
 
     os_ << "  .text\n";
     os_ << "  .globl " << func_name << "\n";
@@ -97,7 +100,7 @@ class RawProgramVisitor {
 
       // 第一个基本块就是函数入口，已经有 func_name:，不额外输出 entry:。
       if (i != 0) {
-        os_ << StripKoopaNamePrefix(bb->name) << ":\n";
+        os_ << LocalLabel(bb->name) << ":\n";
       }
 
       Visit(bb);
@@ -195,6 +198,10 @@ class RawProgramVisitor {
     }
 
     return it->second;
+  }
+
+  std::string LocalLabel(const char *bb_name) const {
+    return current_func_name_ + "_" + StripKoopaNamePrefix(bb_name);
   }
 
   void EmitAddSp(int delta) {
@@ -426,12 +433,12 @@ class RawProgramVisitor {
   void VisitBranch(const koopa_raw_branch_t &branch) {
     LoadValue(branch.cond, "t0");
 
-    os_ << "  bnez t0, " << StripKoopaNamePrefix(branch.true_bb->name) << "\n";
-    os_ << "  j " << StripKoopaNamePrefix(branch.false_bb->name) << "\n";
+    os_ << "  bnez t0, " << LocalLabel(branch.true_bb->name) << "\n";
+    os_ << "  j " << LocalLabel(branch.false_bb->name) << "\n";
   }
 
   void VisitJump(const koopa_raw_jump_t &jump) {
-    os_ << "  j " << StripKoopaNamePrefix(jump.target->name) << "\n";
+    os_ << "  j " << LocalLabel(jump.target->name) << "\n";
   }
 
   void VisitCall(const koopa_raw_value_t &value,
