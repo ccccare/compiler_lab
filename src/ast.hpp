@@ -340,6 +340,38 @@ class BlockStmtAST final : public StmtAST {
   }
 };
 
+class IfStmtAST final : public StmtAST {
+ public:
+  std::unique_ptr<ExprAST> cond;
+  std::unique_ptr<StmtAST> then_stmt;
+  std::unique_ptr<StmtAST> else_stmt;  // nullptr 表示没有 else
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "IfStmtAST {\n";
+
+    PrintIndent(os, indent + 2);
+    os << "cond:\n";
+    cond->Dump(os, indent + 4);
+    os << "\n";
+
+    PrintIndent(os, indent + 2);
+    os << "then:\n";
+    then_stmt->Dump(os, indent + 4);
+    os << "\n";
+
+    if (else_stmt) {
+      PrintIndent(os, indent + 2);
+      os << "else:\n";
+      else_stmt->Dump(os, indent + 4);
+      os << "\n";
+    }
+
+    PrintIndent(os, indent);
+    os << "}";
+  }
+};
+
 class FuncDefAST final : public BaseAST {
  public:
   TypeKind ret_type = TypeKind::Int;

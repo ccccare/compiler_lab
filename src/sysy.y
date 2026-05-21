@@ -49,11 +49,14 @@ static std::unique_ptr<VarDefAST> TakeVarDef(BaseAST *ptr) {
   BaseAST *ast_val;
 }
 
-%token CONST INT RETURN
+%token CONST INT RETURN IF ELSE
 %token LE GE EQ NE LAND LOR
 
 %token <str_val> IDENT
 %token <int_val> INT_CONST
+
+%nonassoc LOWER_THAN_ELSE
+%nonassoc ELSE
 
 %type <ast_val> FuncDef Block BlockItemList BlockItem
 %type <ast_val> Decl ConstDecl ConstDefList ConstDef ConstInitVal ConstExp
@@ -238,6 +241,19 @@ Stmt
   | Block {
       auto stmt = std::make_unique<BlockStmtAST>();
       stmt->block = TakeBlock($1);
+      $$ = stmt.release();
+    }
+  | IF '(' Exp ')' Stmt %prec LOWER_THAN_ELSE {
+      auto stmt = std::make_unique<IfStmtAST>();
+      stmt->cond = TakeExpr($3);
+      stmt->then_stmt = std::unique_ptr<StmtAST>(static_cast<StmtAST *>($5));
+      $$ = stmt.release();
+    }
+  | IF '(' Exp ')' Stmt ELSE Stmt {
+      auto stmt = std::make_unique<IfStmtAST>();
+      stmt->cond = TakeExpr($3);
+      stmt->then_stmt = std::unique_ptr<StmtAST>(static_cast<StmtAST *>($5));
+      stmt->else_stmt = std::unique_ptr<StmtAST>(static_cast<StmtAST *>($7));
       $$ = stmt.release();
     }
   | RETURN Exp ';' {

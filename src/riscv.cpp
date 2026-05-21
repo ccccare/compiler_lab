@@ -82,7 +82,16 @@ class RawProgramVisitor {
 
     EmitAddSp(-stack_size_);
 
-    Visit(func->bbs);
+    for (size_t i = 0; i < func->bbs.len; ++i) {
+    auto bb = reinterpret_cast<koopa_raw_basic_block_t>(func->bbs.buffer[i]);
+
+    // 第一个基本块对应函数入口，已经有 main: 标签，不额外输出 entry:
+    if (i != 0) {
+      os_ << StripKoopaNamePrefix(bb->name) << ":\n";
+      }
+
+    Visit(bb);
+    }
   }
 
   bool NeedStackSlot(const koopa_raw_value_t &value) const {
@@ -159,6 +168,18 @@ class RawProgramVisitor {
     }
   }
 
+
+  void VisitBranch(const koopa_raw_branch_t &branch) {
+    LoadValue(branch.cond, "t0");
+
+    os_ << "  bnez t0, " << StripKoopaNamePrefix(branch.true_bb->name) << "\n";
+    os_ << "  j " << StripKoopaNamePrefix(branch.false_bb->name) << "\n";
+  }
+
+  void VisitJump(const koopa_raw_jump_t &jump) {
+    os_ << "  j " << StripKoopaNamePrefix(jump.target->name) << "\n";
+  }
+
   void Visit(const koopa_raw_basic_block_t &bb) {
     Visit(bb->insts);
   }
@@ -185,6 +206,14 @@ class RawProgramVisitor {
 
       case KOOPA_RVT_BINARY:
         VisitBinary(value, kind.data.binary);
+        break;
+
+      case KOOPA_RVT_BRANCH:
+        VisitBranch(kind.data.branch);
+        break;
+
+      case KOOPA_RVT_JUMP:
+        VisitJump(kind.data.jump);
         break;
 
       default:

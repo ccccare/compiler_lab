@@ -31,11 +31,21 @@ class KoopaGenerator {
   int temp_id_ = 0;
   int var_id_ = 0;
   bool current_block_terminated_ = false;
+  int block_id_ = 0;
 
   std::vector<std::unordered_map<std::string, SymbolInfo>> scopes_;
 
   std::string NewTemp();
   std::string NewVar();
+  std::string NewBlock(const std::string &prefix);
+
+  void EmitBlockLabel(const std::string &label);
+  void EmitJumpIfNeeded(const std::string &target);
+
+  std::string GenerateBoolValue(const std::string &value);
+  std::string GenerateLogicalAnd(const BinaryExprAST &ast);
+  std::string GenerateLogicalOr(const BinaryExprAST &ast);
+  void GenerateIfStmt(const IfStmtAST &ast);
 
   void EnterScope();
   void ExitScope();

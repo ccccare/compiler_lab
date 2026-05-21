@@ -12,6 +12,28 @@ std::string KoopaGenerator::NewVar() {
   return "%v" + std::to_string(var_id_++);
 }
 
+std::string KoopaGenerator::NewBlock(const std::string &prefix) {
+  return "%" + prefix + std::to_string(block_id_++);
+}
+
+void KoopaGenerator::EmitBlockLabel(const std::string &label) {
+  os_ << "\n" << label << ":\n";
+  current_block_terminated_ = false;
+}
+
+void KoopaGenerator::EmitJumpIfNeeded(const std::string &target) {
+  if (!current_block_terminated_) {
+    os_ << "  jump " << target << "\n";
+    current_block_terminated_ = true;
+  }
+}
+
+std::string KoopaGenerator::GenerateBoolValue(const std::string &value) {
+  std::string result = NewTemp();
+  os_ << "  " << result << " = ne " << value << ", 0\n";
+  return result;
+}
+
 void KoopaGenerator::EnterScope() {
   scopes_.emplace_back();
 }
@@ -68,15 +90,16 @@ void KoopaGenerator::GenerateCompUnit(const CompUnitAST &ast) {
 
 void KoopaGenerator::GenerateFuncDef(const FuncDefAST &ast) {
   if (ast.ident != "main") {
-    throw std::runtime_error("Lv4 only supports function named main");
+    throw std::runtime_error("Lv6 only supports function named main");
   }
 
   if (ast.ret_type != TypeKind::Int) {
-    throw std::runtime_error("Lv4 only supports int main()");
+    throw std::runtime_error("Lv6 only supports int main()");
   }
 
   temp_id_ = 0;
   var_id_ = 0;
+  block_id_ = 0;
   current_block_terminated_ = false;
   scopes_.clear();
 
@@ -165,6 +188,35 @@ void KoopaGenerator::GenerateVarDecl(const VarDeclAST &ast) {
   }
 }
 
+void KoopaGenerator::GenerateIfStmt(const IfStmtAST &ast) {
+  std::string then_label = NewBlock("then");
+  std::string else_label = ast.else_stmt ? NewBlock("else") : "";
+  std::string end_label = NewBlock("ifend");
+
+  std::string cond_value = GenerateExpr(*ast.cond);
+
+  if (ast.else_stmt) {
+    os_ << "  br " << cond_value << ", " << then_label << ", " << else_label
+        << "\n";
+  } else {
+    os_ << "  br " << cond_value << ", " << then_label << ", " << end_label
+        << "\n";
+  }
+  current_block_terminated_ = true;
+
+  EmitBlockLabel(then_label);
+  GenerateStmt(*ast.then_stmt);
+  EmitJumpIfNeeded(end_label);
+
+  if (ast.else_stmt) {
+    EmitBlockLabel(else_label);
+    GenerateStmt(*ast.else_stmt);
+    EmitJumpIfNeeded(end_label);
+  }
+
+  EmitBlockLabel(end_label);
+}
+
 void KoopaGenerator::GenerateStmt(const StmtAST &ast) {
   if (const auto *assign_stmt = dynamic_cast<const AssignStmtAST *>(&ast)) {
     const SymbolInfo &symbol = LookupSymbol(assign_stmt->ident);
@@ -194,6 +246,11 @@ void KoopaGenerator::GenerateStmt(const StmtAST &ast) {
     return;
   }
 
+  if (const auto *if_stmt = dynamic_cast<const IfStmtAST *>(&ast)) {
+    GenerateIfStmt(*if_stmt);
+    return;
+  } 
+
   if (const auto *ret_stmt = dynamic_cast<const ReturnStmtAST *>(&ast)) {
     std::string ret_value = GenerateExpr(*ret_stmt->value);
     os_ << "  ret " << ret_value << "\n";
@@ -202,6 +259,60 @@ void KoopaGenerator::GenerateStmt(const StmtAST &ast) {
   }
 
   throw std::runtime_error("unsupported statement AST node");
+}
+
+std::string KoopaGenerator::GenerateLogicalAnd(const BinaryExprAST &ast) {
+  std::string result_ptr = NewVar();
+  os_ << "  " << result_ptr << " = alloc i32\n";
+
+  std::string lhs = GenerateExpr(*ast.lhs);
+  std::string lhs_bool = GenerateBoolValue(lhs);
+
+  std::string rhs_label = NewBlock("land_rhs");
+  std::string end_label = NewBlock("land_end");
+
+  // 默认结果为 0。只有 lhs 和 rhs 都为真时，才会改成 1。
+  os_ << "  store 0, " << result_ptr << "\n";
+  os_ << "  br " << lhs_bool << ", " << rhs_label << ", " << end_label << "\n";
+  current_block_terminated_ = true;
+
+  EmitBlockLabel(rhs_label);
+  std::string rhs = GenerateExpr(*ast.rhs);
+  std::string rhs_bool = GenerateBoolValue(rhs);
+  os_ << "  store " << rhs_bool << ", " << result_ptr << "\n";
+  EmitJumpIfNeeded(end_label);
+
+  EmitBlockLabel(end_label);
+  std::string result = NewTemp();
+  os_ << "  " << result << " = load " << result_ptr << "\n";
+  return result;
+}
+
+std::string KoopaGenerator::GenerateLogicalOr(const BinaryExprAST &ast) {
+  std::string result_ptr = NewVar();
+  os_ << "  " << result_ptr << " = alloc i32\n";
+
+  std::string lhs = GenerateExpr(*ast.lhs);
+  std::string lhs_bool = GenerateBoolValue(lhs);
+
+  std::string rhs_label = NewBlock("lor_rhs");
+  std::string end_label = NewBlock("lor_end");
+
+  // 默认结果为 1。只有 lhs 为假时，才需要计算 rhs。
+  os_ << "  store 1, " << result_ptr << "\n";
+  os_ << "  br " << lhs_bool << ", " << end_label << ", " << rhs_label << "\n";
+  current_block_terminated_ = true;
+
+  EmitBlockLabel(rhs_label);
+  std::string rhs = GenerateExpr(*ast.rhs);
+  std::string rhs_bool = GenerateBoolValue(rhs);
+  os_ << "  store " << rhs_bool << ", " << result_ptr << "\n";
+  EmitJumpIfNeeded(end_label);
+
+  EmitBlockLabel(end_label);
+  std::string result = NewTemp();
+  os_ << "  " << result << " = load " << result_ptr << "\n";
+  return result;
 }
 
 std::string KoopaGenerator::GenerateExpr(const ExprAST &ast) {
@@ -247,29 +358,11 @@ std::string KoopaGenerator::GenerateExpr(const ExprAST &ast) {
     std::string rhs = GenerateExpr(*binary->rhs);
 
     if (binary->op == BinaryOp::LAnd) {
-      std::string lhs_bool = NewTemp();
-      os_ << "  " << lhs_bool << " = ne " << lhs << ", 0\n";
-
-      std::string rhs_bool = NewTemp();
-      os_ << "  " << rhs_bool << " = ne " << rhs << ", 0\n";
-
-      std::string result = NewTemp();
-      os_ << "  " << result << " = and " << lhs_bool << ", " << rhs_bool
-          << "\n";
-      return result;
+      return GenerateLogicalAnd(*binary);
     }
 
     if (binary->op == BinaryOp::LOr) {
-      std::string lhs_bool = NewTemp();
-      os_ << "  " << lhs_bool << " = ne " << lhs << ", 0\n";
-
-      std::string rhs_bool = NewTemp();
-      os_ << "  " << rhs_bool << " = ne " << rhs << ", 0\n";
-
-      std::string result = NewTemp();
-      os_ << "  " << result << " = or " << lhs_bool << ", " << rhs_bool
-          << "\n";
-      return result;
+      return GenerateLogicalOr(*binary);
     }
 
     std::string op;
