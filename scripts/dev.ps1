@@ -1,0 +1,1 @@
+docker run -it --rm -v "${PWD}:/root/compiler" maxxing/compiler-dev bash
