@@ -226,6 +226,20 @@ Stmt
 
       $$ = stmt.release();
     }
+  | Exp ';' {
+      auto stmt = std::make_unique<ExprStmtAST>();
+      stmt->expr = TakeExpr($1);
+      $$ = stmt.release();
+    }
+  | ';' {
+      auto stmt = std::make_unique<ExprStmtAST>();
+      $$ = stmt.release();
+    }
+  | Block {
+      auto stmt = std::make_unique<BlockStmtAST>();
+      stmt->block = TakeBlock($1);
+      $$ = stmt.release();
+    }
   | RETURN Exp ';' {
       auto stmt = std::make_unique<ReturnStmtAST>();
       stmt->value = TakeExpr($2);

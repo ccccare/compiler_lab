@@ -178,6 +178,22 @@ void KoopaGenerator::GenerateStmt(const StmtAST &ast) {
     return;
   }
 
+  if (const auto *expr_stmt = dynamic_cast<const ExprStmtAST *>(&ast)) {
+    if (expr_stmt->expr) {
+      // 表达式语句虽然不使用结果，但表达式本身仍然要被计算。
+      // 例如之后出现函数调用时，函数调用可能有副作用。
+      (void)GenerateExpr(*expr_stmt->expr);
+    }
+
+    // 空语句 ; 不生成任何 IR。
+    return;
+  }
+
+  if (const auto *block_stmt = dynamic_cast<const BlockStmtAST *>(&ast)) {
+    GenerateBlock(*block_stmt->block);
+    return;
+  }
+
   if (const auto *ret_stmt = dynamic_cast<const ReturnStmtAST *>(&ast)) {
     std::string ret_value = GenerateExpr(*ret_stmt->value);
     os_ << "  ret " << ret_value << "\n";

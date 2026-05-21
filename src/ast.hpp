@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+class BlockAST;
+
 enum class TypeKind {
   Int,
 };
@@ -269,6 +271,29 @@ class AssignStmtAST final : public StmtAST {
   }
 };
 
+class ExprStmtAST final : public StmtAST {
+ public:
+  // nullptr 表示空语句 ";"
+  std::unique_ptr<ExprAST> expr;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "ExprStmtAST {";
+
+    if (expr) {
+      os << "\n";
+      expr->Dump(os, indent + 2);
+      os << "\n";
+      PrintIndent(os, indent);
+      os << "}";
+    } else {
+      os << " empty }";
+    }
+  }
+};
+
+
+
 class ReturnStmtAST final : public StmtAST {
  public:
   std::unique_ptr<ExprAST> value;
@@ -294,6 +319,22 @@ class BlockAST final : public BaseAST {
       item->Dump(os, indent + 2);
       os << "\n";
     }
+    PrintIndent(os, indent);
+    os << "}";
+  }
+};
+
+class BlockStmtAST final : public StmtAST {
+ public:
+  std::unique_ptr<BlockAST> block;
+
+  void Dump(std::ostream &os, int indent = 0) const override {
+    PrintIndent(os, indent);
+    os << "BlockStmtAST {\n";
+
+    block->Dump(os, indent + 2);
+    os << "\n";
+
     PrintIndent(os, indent);
     os << "}";
   }
